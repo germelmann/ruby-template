@@ -12,14 +12,16 @@ $VERBOSE = warn_level
 PROFILE = [:static, :dynamic, :neo4j]
 
 STAGING = File::dirname(File::expand_path(__FILE__)).include?('staging')
-PROJECT_NAME_FIXED = PROJECT_NAME + (STAGING ? 'staging' : '') + (DEVELOPMENT ? 'dev' : '')
+PROJECT_NAME_FIXED = PROJECT_NAME + (STAGING ? 'staging' : '')
 DEV_NGINX_PORT = 8025
 DEV_NEO4J_PORT = 8021
 RAW_PATH = File.join(DATA_PATH, 'raw')
 GEN_PATH = File.join(DATA_PATH, 'gen')
 NEO4J_LOGS_PATH = File::join(LOGS_PATH, 'neo4j')
 NEO4J_DATA_PATH = File::join(DATA_PATH, 'neo4j')
+NEO4J_PLUGINS_PATH = File::join(DATA_PATH, 'neo4j-plugins')
 INTERNAL_FILES_PATH = File::join(DATA_PATH, 'internal')
+PICTURES_PATH = File.join(DATA_PATH, 'pictures')
 
 docker_compose = {
     :services => {},
@@ -35,13 +37,13 @@ if PROFILE.include?(:static)
     }
     if !DEVELOPMENT
         docker_compose[:services][:nginx][:environment] = [
-            'VIRTUAL_HOST=physikmarathon.de',
-            'LETSENCRYPT_HOST=physikmarathon.de',
-            'LETSENCRYPT_EMAIL=specht@gymnasiumsteglitz.de'
+            "VIRTUAL_HOST=#{WEBSITE_HOST}",
+            "LETSENCRYPT_HOST=#{WEBSITE_HOST}",
+            "LETSENCRYPT_EMAIL=#{LETSENCRYPT_EMAIL}"
         ]
         docker_compose[:services][:nginx][:expose] = ['80']
     end
-    docker_compose[:services][:nginx][:links] = ["ruby:#{PROJECT_NAME_FIXED}_ruby_1"]
+    docker_compose[:services][:nginx][:links] = ["ruby:ruby"]
     nginx_config = <<~eos
         log_format custom '$http_x_forwarded_for - $remote_user [$time_local] "$request" '
                           '$status $body_bytes_sent "$http_referer" '
@@ -52,6 +54,7 @@ if PROFILE.include?(:static)
             text/html                       epoch;
             text/css                        max;
             application/javascript          max;
+            image/jpeg                      max;
             ~image/                         max;
             ~font/                          max;
             application/x-font-ttf          max;
@@ -71,8 +74,13 @@ if PROFILE.include?(:static)
 
             listen 80;
             server_name localhost;
-            client_max_body_size 100M;
+            client_max_body_size 10G;
             expires $expires;
+
+            # Allow long uploads (up to 30 minutes)
+            proxy_read_timeout 1800s;
+            proxy_send_timeout 1800s;
+            send_timeout 1800s;
 
             gzip on;
             gzip_comp_level 6;
@@ -103,11 +111,14 @@ if PROFILE.include?(:static)
             }
 
             location @ruby {
-                proxy_pass http://#{PROJECT_NAME_FIXED}_ruby_1:9292;
+                proxy_pass http://#{PROJECT_NAME_FIXED}-ruby-1:9292;
                 proxy_set_header Host $host;
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection Upgrade;
+                proxy_read_timeout 1800s;
+                proxy_send_timeout 1800s;
+                send_timeout 1800s;
             }
         }
     eos
@@ -124,22 +135,24 @@ if PROFILE.include?(:dynamic)
     env << 'DEVELOPMENT=1' if DEVELOPMENT
     env << 'STAGING=1' if STAGING
     env << "WEBSITE_HOST=#{WEBSITE_HOST}"
+    env << 'nginx.proxy.client_max_body_size=50G'
     docker_compose[:services][:ruby] = {
         :build => './docker/ruby',
         :volumes => ['./src:/src:ro',
                      "#{RAW_PATH}:/raw",
-                     "#{GEN_PATH}:/gen",
+                     "#{GEN_PATH}:/gen:/gen/pictures",
                     ],
         :environment => env,
         :working_dir => '/src/ruby',
         :entrypoint =>  DEVELOPMENT ?
             'rerun -b --dir /src/ruby -s SIGKILL \'rackup --host 0.0.0.0\'' :
-            'rackup --host 0.0.0.0'
+            # 'rackup --host 0.0.0.0'
+            'puma -p 9292 -t 0:1 -e production'
     }
     if PROFILE.include?(:neo4j)
         docker_compose[:services][:ruby][:depends_on] ||= []
         docker_compose[:services][:ruby][:depends_on] << :neo4j
-        # docker_compose[:services][:ruby][:links] = ['neo4j:neo4j']
+        docker_compose[:services][:ruby][:links] = ['neo4j:neo4j']
     end
 end
 
@@ -147,7 +160,8 @@ if PROFILE.include?(:neo4j)
     docker_compose[:services][:neo4j] = {
         :build => './docker/neo4j',
         :volumes => ["#{NEO4J_DATA_PATH}:/data",
-                     "#{NEO4J_LOGS_PATH}:/logs"]
+                     "#{NEO4J_LOGS_PATH}:/logs",
+                     "#{NEO4J_PLUGINS_PATH}:/plugins"]
     }
     docker_compose[:services][:neo4j][:environment] = [
         'NEO4J_AUTH=none',
@@ -157,8 +171,9 @@ if PROFILE.include?(:neo4j)
     docker_compose[:services][:neo4j][:user] = '1000'
 end
 
+
 if DEVELOPMENT
-    docker_compose[:services][:nginx][:ports] = ["0.0.0.0:#{DEV_NGINX_PORT}:80"]
+    docker_compose[:services][:nginx][:ports] = ["127.0.0.1:#{DEV_NGINX_PORT}:80"]
     if PROFILE.include?(:neo4j)
         docker_compose[:services][:neo4j][:ports] ||= []
         docker_compose[:services][:neo4j][:ports] << "127.0.0.1:#{DEV_NEO4J_PORT}:7474"
@@ -172,11 +187,10 @@ unless DEVELOPMENT
     end
 end
 
-docker_compose[:networks] = {DOCKER_NETWORK_NAME => {}}
+#docker_compose[:networks] = {DOCKER_NETWORK_NAME => {}}
 docker_compose[:services].each_pair do |k, v|
-    v[:networks] = {DOCKER_NETWORK_NAME => {:aliases => [k]}}
+    v[:network_mode] = 'default'
 end
-
 
 File::open('docker-compose.yaml', 'w') do |f|
     f.puts "# NOTICE: don't edit this file directly, use config.rb instead!\n"
@@ -194,5 +208,8 @@ end
 FileUtils::mkpath(RAW_PATH)
 FileUtils::mkpath(File.join(RAW_PATH, 'uploads'))
 FileUtils::mkpath(GEN_PATH)
+FileUtils::mkpath(PICTURES_PATH)
 
-system("docker-compose --project-name #{PROJECT_NAME_FIXED} #{ARGV.join(' ')}")
+`docker compose 2> /dev/null`
+DOCKER_COMPOSE = ($? == 0) ? 'docker compose' : 'docker-compose'
+system("#{DOCKER_COMPOSE} --project-name #{PROJECT_NAME} #{ARGV.join(' ')}")

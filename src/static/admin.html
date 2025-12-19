@@ -1,0 +1,152 @@
+#{site_for_user_with_permission!("admin")}
+<div class='container'>
+    <div class='row'>
+        <div class='col-md-12'>
+            <h1>Abiball Administration</h1>
+            <div class="row">
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-people"></i>&nbsp;&nbsp;Benutzer verwalten</h5>
+                            <p class="card-text">Benutzer ansehen, bearbeiten und Ticket-Limits setzen</p>
+                            <a href="/users" class="btn btn-primary">Zur Benutzerverwaltung</a>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-list-check"></i>&nbsp;&nbsp;Bestellungsmanagement</h5>
+                            <p class="card-text">Bestellungen verwalten, Statistiken einsehen und PDFs generieren</p>
+                            <a href="/order_management" class="btn btn-primary">Zum Bestellungsmanagement</a>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-calendar-plus"></i>&nbsp;&nbsp;Events verwalten</h5>
+                            <p class="card-text">Events erstellen, bearbeiten und Gästelisten exportieren</p>
+                            <a href="/events" class="btn btn-primary">Zur Event-Verwaltung</a>
+                        </div>
+                    </div>
+                </div>
+                <!-- <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-chat-dots"></i>&nbsp;&nbsp;Support-Anfragen</h5>
+                            <p class="card-text">Kundensupport verwalten und Anfragen bearbeiten</p>
+                            <a href="/support" class="btn btn-primary">Zum Support</a>
+                        </div>
+                    </div>
+                </div> -->
+            </div>
+            <div class="row mt-4">
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-qr-code-scan"></i>&nbsp;&nbsp;Ticket Scanner</h5>
+                            <p class="card-text">Tickets scannen und einlösen am Veranstaltungseingang</p>
+                            <a href="/ticket_scanner" class="btn btn-primary">Zum Ticket Scanner</a>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-person-check"></i>&nbsp;&nbsp;Benutzernamen bereinigen</h5>
+                            <p class="card-text">Alle Benutzernamen auf URL-sichere Zeichen prüfen und korrigieren</p>
+                            <button id="sanitize_usernames_btn" class="btn btn-warning">Jetzt bereinigen</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-person-check"></i>&nbsp;&nbsp;Jahrbuch aktivieren</h5>
+                            <p class="card-text">Aktiviere das Jahrbuch für alle Benutzer</p>
+                            <button id="enable_yearbook_btn" class="btn btn-success">Jetzt aktivieren</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    $(document).ready(function() {
+        $('#sanitize_usernames_btn').click(function() {
+            const button = $(this);
+            
+            showTemplateModal('Benutzernamen bereinigen', 
+                'Möchtest du alle Benutzernamen auf URL-sichere Zeichen prüfen und automatisch korrigieren? Leerzeichen werden durch Unterstriche ersetzt und ungültige Zeichen entfernt.',
+                'Ja, bereinigen', 'btn-warning', 'Abbrechen', 'btn-secondary', function() {
+                    button.prop('disabled', true).html('<i class="bi bi-hourglass-split"></i> Bereinige...');
+                    
+                    api_call('/api/admin/sanitize_usernames', {}, function(data) {
+                        button.prop('disabled', false).html('Jetzt bereinigen');
+                        
+                        if (data.success) {
+                            let message = `<div class="alert alert-success">
+                                <h5><i class="bi bi-check-circle"></i> ${data.message}</h5>
+                                <p><strong>Statistik:</strong></p>
+                                <ul>
+                                    <li>Gesamtanzahl Benutzer: ${data.total_users}</li>
+                                    <li>Bereinigte Benutzernamen: ${data.sanitized_count}</li>
+                                    <li>Bereits gültig: ${data.unchanged_count}</li>
+                                </ul>
+                            </div>`;
+                            
+                            if (data.changes && data.changes.length > 0) {
+                                message += '<div class="alert alert-info"><h6>Änderungen:</h6><ul>';
+                                data.changes.forEach(function(change) {
+                                    message += `<li><code>${change.old}</code> → <code>${change.new}</code></li>`;
+                                });
+                                message += '</ul></div>';
+                            }
+                            
+                            if (data.errors && data.errors.length > 0) {
+                                message += '<div class="alert alert-danger"><h6>Fehler:</h6><ul>';
+                                data.errors.forEach(function(error) {
+                                    message += `<li>${error.username}: ${error.error}</li>`;
+                                });
+                                message += '</ul></div>';
+                            }
+                            
+                            showTemplateModal('Bereinigung abgeschlossen', message, 'OK', 'btn-primary', null, null, function() {});
+                        } else {
+                            showTemplateModal('Fehler', data.error || 'Fehler beim Bereinigen der Benutzernamen', 'OK', 'btn-danger', null, null, function() {});
+                        }
+                    }, function() {
+                        button.prop('disabled', false).html('Jetzt bereinigen');
+                        showTemplateModal('Fehler', 'Netzwerkfehler beim Bereinigen der Benutzernamen', 'OK', 'btn-danger', null, null, function() {});
+                    });
+                });
+        });
+        $('#enable_yearbook_btn').click(function() {
+            const button = $(this);
+            
+            showTemplateModal('Jahrbuch aktivieren', 
+                'Möchtest du das Jahrbuch für alle Benutzer aktivieren? Benutzer können dann ihre Jahrbuch-Einträge erstellen und bearbeiten.',
+                'Ja, aktivieren', 'btn-success', 'Abbrechen', 'btn-secondary', function() {
+                    button.prop('disabled', true).html('<i class="bi bi-hourglass-split"></i> Aktiviere...');
+                    
+                    api_call('/api/yearbook_enable', {}, function(data) {
+                        button.prop('disabled', false).html('Jahrbuch aktivieren');
+                        
+                        if (data.success) {
+                            showTemplateModal('Erfolg', 'Das Jahrbuch wurde erfolgreich aktiviert.', 'OK', 'btn-primary', null, null, function() {
+                                location.reload();
+                            });
+                        } else {
+                            showTemplateModal('Fehler', data.error || 'Fehler beim Aktivieren des Jahrbuchs', 'OK', 'btn-danger', null, null, function() {});
+                        }
+                    }, function() {
+                        button.prop('disabled', false).html('Jahrbuch aktivieren');
+                        showTemplateModal('Fehler', 'Netzwerkfehler beim Aktivieren des Jahrbuchs', 'OK', 'btn-danger', null, null, function() {});
+                    });
+                });
+        });
+    });
+</script>
